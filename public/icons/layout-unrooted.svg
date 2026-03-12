@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg id="Layer_1" xmlns="http://www.w3.org/2000/svg" version="1.1" viewBox="0 0 512 512">
+  <!-- Generator: Adobe Illustrator 29.8.2, SVG Export Plug-In . SVG Version: 2.1.1 Build 3)  -->
+  <defs>
+    <style>
+      .st0 {
+        fill: none;
+        stroke: #000;
+        stroke-linecap: round;
+        stroke-linejoin: round;
+        stroke-width: 26px;
+      }
+    </style>
+  </defs>
+  <polyline class="st0" points="59.01 430.33 127.59 378.11 179.61 338.51 228.95 251.49 332.62 213.18 399.57 188.45"/>
+  <line class="st0" x1="114.52" y1="446.77" x2="127.59" y2="378.11"/>
+  <line class="st0" x1="179.61" y1="338.51" x2="191.95" y2="446.77"/>
+  <line class="st0" x1="136.1" y1="59.97" x2="228.95" y2="251.49"/>
+  <line class="st0" x1="332.62" y1="213.18" x2="435.88" y2="234.36"/>
+  <line class="st0" x1="190.57" y1="158.3" x2="209.08" y2="79.5"/>
+  <line class="st0" x1="285.14" y1="234.36" x2="415.67" y2="271.7"/>
+</svg>

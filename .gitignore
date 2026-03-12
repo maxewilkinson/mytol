@@ -1,0 +1,20 @@
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+
+# TypeScript build cache
+tsconfig.tsbuildinfo
+
+# Vite cache
+.vite/
+
+# OS
+.DS_Store
+
+# My old files
+OLD/
+
+# Claude Code project settings
+.claude/

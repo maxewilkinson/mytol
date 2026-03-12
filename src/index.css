@@ -1,0 +1,471 @@
+/* ============================================================
+   Global reset & layout
+   ============================================================ */
+
+* { box-sizing: border-box; }
+
+html, body, #root {
+  height: 100%;
+  width: 100%;
+  margin: 0;
+  overflow: hidden;
+}
+
+body {
+  font-family: system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif;
+}
+
+/* ============================================================
+   App shell
+   ============================================================ */
+
+.app { display: contents; } /* transparent wrapper from App.tsx */
+
+.app-container {
+  display: flex;
+  height: 100vh;
+  width: 100vw;
+}
+
+/* ============================================================
+   Left control panel
+   ============================================================ */
+
+.panel {
+  width: 300px;
+  height: 100vh;
+  overflow-y: auto;
+  flex-shrink: 0;
+  border-right: 1px solid #ccc;
+  background: #f9f9f9;
+  padding: 0 0 8px 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.panel-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 10px 6px;
+  border-bottom: 1px solid #ddd;
+  background: #f0f0f0;
+  flex-shrink: 0;
+}
+
+.section-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 5px 10px;
+  background: #e8e8e8;
+  border-top: 1px solid #d0d0d0;
+  border-bottom: 1px solid #d0d0d0;
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 600;
+  color: #333;
+  user-select: none;
+  flex-shrink: 0;
+}
+.section-header:hover { background: #ddd; }
+
+.panel-show-btn {
+  position: fixed;
+  top: 8px;
+  left: 8px;
+  z-index: 100;
+  background: #f9f9f9;
+  border: 1px solid #ccc;
+  border-radius: 4px;
+  padding: 4px 8px;
+  cursor: pointer;
+  font-size: 16px;
+}
+.panel-show-btn:hover { background: #e8e8e8; }
+
+/* ============================================================
+   Canvas area
+   ============================================================ */
+
+.canvas-wrap {
+  flex-grow: 1;
+  height: 100vh;
+  overflow: hidden;
+  position: relative;
+}
+
+/* ============================================================
+   Generic primitives
+   ============================================================ */
+
+.row { margin-bottom: 12px; padding: 0 8px; }
+
+.label {
+  font-weight: bold;
+  display: block;
+  margin-bottom: 4px;
+  font-size: 14px;
+}
+
+.label-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 4px;
+}
+
+.note { font-size: 12px; color: #555; }
+
+.btn { padding: 4px 8px; }
+.btn.active { background: #4e79a7; color: white; }
+
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  background: #eee;
+  padding: 2px 6px;
+  border-radius: 4px;
+  margin: 2px;
+  cursor: pointer;
+}
+
+input[type="file"],
+input[type="text"],
+input[type="number"],
+select {
+  width: 100%;
+  padding: 6px;
+  border: 1px solid #ccc;
+  border-radius: 6px;
+}
+
+/* ============================================================
+   Tooltip
+   ============================================================ */
+
+.tooltip {
+  background: #333;
+  color: white;
+  padding: 5px 8px;
+  border-radius: 4px;
+  font-family: sans-serif;
+  font-size: 13px;
+  pointer-events: none;
+  z-index: 10;
+}
+
+/* ============================================================
+   Annotation track config list
+   ============================================================ */
+
+.track-config-list {
+  border: 1px solid #ddd;
+  border-radius: 4px;
+}
+
+.track-item {
+  padding: 6px;
+  background: #fff;
+  border-bottom: 1px solid #eee;
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  gap: 4px 8px;
+  align-items: center;
+}
+.track-item:last-child { border-bottom: none; }
+.track-item-name { grid-column: 2 / 3; font-weight: bold; }
+.track-item-controls { grid-column: 2 / 3; display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.track-item-order { grid-column: 1 / 2; grid-row: 1 / 3; display: flex; flex-direction: column; }
+.track-item-order button { padding: 0 4px; }
+
+/* ============================================================
+   Legend
+   ============================================================ */
+
+.legend-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 4px;
+  border-radius: 3px;
+}
+.legend-item:hover { background: #eee; }
+
+.legend-swatch {
+  width: 14px;
+  height: 14px;
+  border: 1px solid #888;
+  border-radius: 3px;
+  cursor: pointer;
+}
+.legend-label { font-size: 13px; }
+
+/* ============================================================
+   Modal (colour picker)
+   ============================================================ */
+
+.modal-backdrop {
+  position: fixed;
+  top: 0; left: 0; right: 0; bottom: 0;
+  background: rgba(0, 0, 0, 0.3);
+  z-index: 90;
+}
+.modal-content {
+  position: fixed;
+  z-index: 100;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  background: white;
+  border: 1px solid #ccc;
+  border-radius: 8px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+  padding: 12px;
+}
+.modal-header {
+  font-weight: bold;
+  font-size: 14px;
+  margin-bottom: 8px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+.modal-footer {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+  margin-top: 12px;
+}
+
+/* ============================================================
+   Selection panel
+   ============================================================ */
+
+.selection-panel {
+  border: 2px solid #ff8200;
+  border-radius: 4px;
+  padding: 8px;
+  background: #fff8f0;
+}
+.selection-info { font-size: 13px; margin-bottom: 8px; }
+.selection-actions { display: flex; flex-wrap: wrap; gap: 6px; }
+
+.range-panel {
+  border: 2px solid #ccc;
+  border-radius: 4px;
+  padding: 8px;
+  background: #fff;
+  margin-top: -4px;
+  border-top-left-radius: 0;
+  border-top-right-radius: 0;
+}
+
+/* ============================================================
+   Zoom row
+   ============================================================ */
+
+.zoom-row {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+}
+.zoom-row .btn {
+  padding: 2px 8px;
+  font-size: 12px;
+}
+
+/* ============================================================
+   Layout toggle buttons
+   ============================================================ */
+
+.layout-toggle-group {
+  display: flex;
+  gap: 4px;
+  align-items: center;
+  flex-wrap: nowrap;
+}
+.layout-toggle-btn {
+  flex: 1 1 0;
+  min-width: 0;
+  padding: 3px 6px;
+  border-radius: 4px;
+  border: 1px solid #ccc;
+  background: #fff;
+  font-size: 12px;
+  cursor: pointer;
+  display: inline-flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  white-space: nowrap;
+}
+.layout-toggle-btn.active {
+  background: #4e79a7;
+  color: #fff;
+  border-color: #4e79a7;
+}
+.layout-toggle-btn img {
+  width: 56px;
+  height: 56px;
+  opacity: 0.8;
+}
+
+/* ============================================================
+   Pill toggle (phylogram/cladogram etc.)
+   ============================================================ */
+
+.toggle-pill {
+  display: inline-flex;
+  border-radius: 999px;
+  border: 1px solid #ccc;
+  overflow: hidden;
+}
+.toggle-pill button {
+  padding: 2px 8px;
+  border: none;
+  background: transparent;
+  font-size: 12px;
+  cursor: pointer;
+}
+.toggle-pill button.active {
+  background: #4e79a7;
+  color: #fff;
+}
+
+/* ============================================================
+   Search autocomplete
+   ============================================================ */
+
+.search-box { position: relative; }
+
+.search-box input {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 6px 28px 6px 8px;
+}
+
+.search-clear {
+  position: absolute;
+  right: 4px;
+  top: 50%;
+  transform: translateY(-50%);
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  font-size: 14px;
+  line-height: 1;
+  padding: 2px 4px;
+  color: #666;
+}
+
+.search-suggest-list {
+  position: absolute;
+  z-index: 30;
+  left: 0;
+  right: 0;
+  max-height: 220px;
+  overflow-y: auto;
+  background: #fff;
+  border: 1px solid #ddd;
+  border-top: none;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.06);
+}
+
+.search-suggest-item {
+  padding: 6px 8px;
+  cursor: pointer;
+  font-size: 13px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.search-suggest-item:hover,
+.search-suggest-item.active {
+  background: #eef3ff;
+}
+
+/* ============================================================
+   File input row
+   ============================================================ */
+
+.file-input-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.file-input-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex: 1;
+  min-width: 0;
+}
+
+/* ============================================================
+   Keyboard shortcut strip
+   ============================================================ */
+
+.shortcut-strip {
+  padding: 6px 10px 8px;
+  background: #f0f0f0;
+  border-top: 1px solid #ddd;
+  font-size: 11px;
+  color: #555;
+  margin-top: auto;
+  flex-shrink: 0;
+}
+
+.shortcut-strip-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 3px;
+  align-items: center;
+  line-height: 1.8;
+}
+
+.shortcut-strip-row + .shortcut-strip-row {
+  margin-top: 2px;
+}
+
+.shortcut-strip kbd {
+  display: inline-block;
+  background: #fff;
+  border: 1px solid #bbb;
+  border-radius: 3px;
+  padding: 0 4px;
+  font-size: 10px;
+  font-family: inherit;
+  box-shadow: 0 1px 0 #aaa;
+  line-height: 1.6;
+}
+
+/* ============================================================
+   Drop zone hint (shown on canvas when no tree loaded)
+   ============================================================ */
+
+.drop-zone-hint {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  pointer-events: none;
+  background: rgba(255, 255, 255, 0.9);
+  border: 3px dashed #ccc;
+  transition: border-color 0.15s, background 0.15s;
+}
+
+.drop-zone-hint.drag-over {
+  border-color: #4e79a7;
+  background: rgba(78, 121, 167, 0.06);
+}
+
+.drop-zone-hint-text {
+  text-align: center;
+  color: #666;
+  user-select: none;
+}
