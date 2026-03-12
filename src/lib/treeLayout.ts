@@ -15,14 +15,39 @@ export function layoutRectangular(
   phylogram: boolean
 ): { coords: { x: number; y: number }[]; height: number; maxX: number } {
   const { nodes } = tree;
-  const maxX = d3.max(nodes, (n) => (phylogram ? n.cumLen : n.depth)) || 1;
+  let maxX: number;
+  // subtreeHeight[id] = max edges from node to any leaf in its subtree (0 for leaves)
+  const subtreeHeight = new Int32Array(nodes.length);
+  if (phylogram) {
+    maxX = d3.max(nodes, (n) => n.cumLen) || 1;
+  } else {
+    // Iterative post-order to compute subtree heights (safe for 500k trees)
+    const order: number[] = [];
+    const stk: number[] = [tree.root];
+    while (stk.length) {
+      const id = stk.pop()!;
+      order.push(id);
+      for (const ch of nodes[id].children) stk.push(ch);
+    }
+    for (let i = order.length - 1; i >= 0; i--) {
+      const id = order[i];
+      const nd = nodes[id];
+      if (!nd.isLeaf) {
+        let h = 0;
+        for (const ch of nd.children) if (subtreeHeight[ch] + 1 > h) h = subtreeHeight[ch] + 1;
+        subtreeHeight[id] = h;
+      }
+    }
+    maxX = subtreeHeight[tree.root] || 1;
+  }
 
   const coords = new Array(nodes.length)
     .fill(0)
     .map(() => ({ x: 0, y: 0 }));
 
   for (const nd of nodes) {
-    const x = phylogram ? nd.cumLen : nd.depth;
+    // Cladogram: back-calculated from right — leaves at maxX, internals as far right as topology allows
+    const x = phylogram ? nd.cumLen : maxX - subtreeHeight[nd.id];
     const y = nd.isLeaf ? nd.leafIndex : (nd.L + nd.R - 1) / 2;
     coords[nd.id] = { x, y };
   }

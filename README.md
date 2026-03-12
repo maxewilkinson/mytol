@@ -4,6 +4,10 @@
 
 **myTOL** is inspired by iTOL, but is performant with very large trees. I've tested it with 500k leaves, but it should work with more. This is achieved with "Level of Detail" (LOD) thinning - leaves are hidden when they become smaller than a pixel when you zoom out.
 
+Find it here! **https://mytol.wilkinsonlab.bio/**
+
+Or, install it locally, see below for instructions.
+
 I obviously could not have coded this by myself. This was created by passing the code between Gemini and chatGPT until it finally worked (with a LOT of prompting and manual intervention, it must be said). The code was then finalised using Claude Code. Claude then wrote most of this README. I tried to get rid of the AI-ese, but some residue may remain.
 
 ![myTOL screenshot](treepic.png)

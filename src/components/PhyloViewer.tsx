@@ -5,6 +5,8 @@ import React, {
   useCallback,
   useMemo,
 } from "react";
+import exampleNewick from "../../example/RTtree.nwk?raw";
+import exampleCsv from "../../example/RTtreelabels.csv?raw";
 import * as d3 from "d3";
 import { HexColorPicker } from "react-colorful";
 
@@ -198,12 +200,13 @@ export default function Phylo() {
   // User-tunable rendering options
   const [optFontScale, setOptFontScale] = useState(1.0);
   const [optLodMinPx, setOptLodMinPx] = useState(1.5);
-  const [optBranchThickness, setOptBranchThickness] = useState(1.0);
+  const [optBranchThickness, setOptBranchThickness] = useState(1.5);
   const [optBarFill, setOptBarFill] = useState(1.0);
   const [optPctIncludeUnlabelled, setOptPctIncludeUnlabelled] = useState(false);
   const [optBackground, setOptBackground] = useState("#ffffff");
   const [optShowSupportLabels, setOptShowSupportLabels] = useState(false);
   const [optSupportColouring, setOptSupportColouring] = useState(true);
+  const [optTaperBranches, setOptTaperBranches] = useState(true);
   const [rangeDisplayMode, setRangeDisplayMode] = useState<"background" | "branches">("background");
 
   const [panelVisible, setPanelVisible] = useState(true);
@@ -623,6 +626,18 @@ export default function Phylo() {
       }
     }
 
+    // Per-node branch width (screen pixels before zoom adjustment).
+    // Taper: width ∝ (cladeSize/N)^0.3, min 0.5× so leaves stay visible.
+    const N_leaves = leaves.length || 1;
+    const nodeWidthPx = new Float32Array(nodes.length);
+    for (let i = 0; i < nodes.length; i++) {
+      const nd = nodes[i];
+      const tw = optTaperBranches
+        ? optBranchThickness * Math.max(0.5, Math.pow((nd.R - nd.L) / N_leaves, 0.3))
+        : optBranchThickness;
+      nodeWidthPx[i] = tw;
+    }
+
     // ------ Highlight helpers (defined here to close over shared vars) ------
 
     const drawHoverHighlightRect = () => {
@@ -655,16 +670,23 @@ export default function Phylo() {
       const xNode = -W / 2 + PADDING + sx * a.x;
       const y1 = -H / 2 + PADDING + sy * nd.L;
       const y2 = -H / 2 + PADDING + sy * (nd.R - 1) + sy;
+      ctx.shadowColor = `rgba(${r},${g},${b},0.6)`;
+      ctx.shadowBlur = 10;
       const grad = ctx.createLinearGradient(xNode, 0, trackRightEdgeX, 0);
       grad.addColorStop(0, `rgba(${r},${g},${b},${alpha1})`);
       grad.addColorStop(1, `rgba(${r},${g},${b},${alpha2})`);
       ctx.fillStyle = grad;
       ctx.fillRect(xNode, y1, trackRightEdgeX - xNode, y2 - y1);
+      ctx.shadowBlur = 0;
+      ctx.shadowColor = "transparent";
       const gradL = ctx.createLinearGradient(-W / 2, 0, xNode, 0);
       gradL.addColorStop(1, `rgba(${r},${g},${b},0.1)`);
       gradL.addColorStop(0, `rgba(${r},${g},${b},0.0)`);
       ctx.fillStyle = gradL;
       ctx.fillRect(-W / 2, y1, xNode - -W / 2, y2 - y1);
+      // Bold left-edge bar
+      ctx.fillStyle = `rgba(${r},${g},${b},0.85)`;
+      ctx.fillRect(xNode - 1, y1, 2, y2 - y1);
     };
 
     const drawHoverHighlightCirc = () => {
@@ -707,6 +729,8 @@ export default function Phylo() {
       const aRect = (rectCoords as any)[nd.id];
       const rNode = rectToPolar(rectMaxX > 0 ? aRect.x / rectMaxX : 0, aRect.y, N, R, rotation, arc).radius;
       const { trackOuterRadius } = computeCircularTrackRadii(W, H, { coords: rectCoords as any[], maxX: rectMaxX }, R, N, effectiveTrackWidth);
+      ctx.shadowColor = `rgba(${r},${g},${b},0.5)`;
+      ctx.shadowBlur = 10;
       const steps = 8;
       for (let i = 0; i < steps; i++) {
         const t0 = i / steps;
@@ -721,6 +745,8 @@ export default function Phylo() {
         ctx.fillStyle = `rgba(${r},${g},${b},${alpha.toFixed(3)})`;
         ctx.fill();
       }
+      ctx.shadowBlur = 0;
+      ctx.shadowColor = "transparent";
     };
 
 
@@ -774,8 +800,15 @@ export default function Phylo() {
       ctx.moveTo(hull[0][0], hull[0][1]);
       for (let i = 1; i < hull.length; i++) ctx.lineTo(hull[i][0], hull[i][1]);
       ctx.closePath();
+      ctx.shadowColor = `rgba(${r},${g},${b},0.5)`;
+      ctx.shadowBlur = 10;
       ctx.fillStyle = `rgba(${r},${g},${b},${alpha})`;
       ctx.fill();
+      ctx.strokeStyle = `rgba(${r},${g},${b},0.7)`;
+      ctx.lineWidth = 1.5 / gZoom;
+      ctx.stroke();
+      ctx.shadowBlur = 0;
+      ctx.shadowColor = "transparent";
     };
 
     // ---- Per-layout draw functions ----
@@ -792,9 +825,6 @@ export default function Phylo() {
         ctx.fillStyle = r.color + "55";
         ctx.fillRect(xNode, y1, trackRightEdgeX - xNode, y2 - y1);
       }
-
-      const lw = optBranchThickness;
-      const sup_lw = optBranchThickness * 1.2;
 
       for (const nd of nodes) {
         if (skipNode[nd.id] === 2) continue;
@@ -838,7 +868,7 @@ export default function Phylo() {
 
         const sup_P = nd.support;
         const color_P = nodeRangeColor.get(nd.id) ?? (optSupportColouring && sup_P !== undefined ? supportColor(sup_P) : "#333");
-        const lw_P = sup_P !== undefined ? sup_lw : lw;
+        const lw_P = nodeWidthPx[nd.id];
 
         for (const ch of nd.children) {
           const b = (rectCoords as any)[ch];
@@ -847,7 +877,7 @@ export default function Phylo() {
 
           const sup_C = nodes[ch].support;
           const color_C = nodeRangeColor.get(ch) ?? (optSupportColouring && sup_C !== undefined ? supportColor(sup_C) : "#333");
-          const lw_C = sup_C !== undefined ? sup_lw : lw;
+          const lw_C = nodeWidthPx[ch];
 
           // Vertical segment
           if (Math.abs(yc - yp) * vZoom >= MIN_EDGE_PIXELS) {
@@ -864,6 +894,12 @@ export default function Phylo() {
             if (xp < xc) ctx.fillRect(xp, yc - rh / 2, xc - xp, rh);
             else ctx.fillRect(xc, yc - rh / 2, xp - xc, rh);
           }
+
+          // Round elbow: filled ellipse at the corner compensates for vZoom Y-stretch
+          ctx.beginPath();
+          ctx.ellipse(xp, yc, lw_P / 2, lw_P / (2 * Math.max(vZoom, 0.01)), 0, 0, 2 * Math.PI);
+          ctx.fillStyle = color_P;
+          ctx.fill();
         }
       }
 
@@ -902,9 +938,6 @@ export default function Phylo() {
       ctx.arc(0, 0, 3 / gZoom, 0, 2 * Math.PI);
       ctx.fill();
 
-      const lw = optBranchThickness / gZoom;
-      const sup_lw = optBranchThickness * 1.2 / gZoom;
-
       const drawShortArc = (radius: number, a1: number, a2: number) => {
         let start = a1, end = a2;
         let da = end - start;
@@ -915,6 +948,9 @@ export default function Phylo() {
 
       const arcRad = (arcDeg * Math.PI) / 180;
       const anglePerLeaf = N > 0 ? arcRad / N : 0;
+
+      ctx.lineCap = "round";
+      ctx.lineJoin = "round";
 
       // Edges
       for (const nd of nodes) {
@@ -948,7 +984,7 @@ export default function Phylo() {
 
         const sup_P = nd.support;
         const color_P = nodeRangeColor.get(nd.id) ?? (optSupportColouring && sup_P !== undefined ? supportColor(sup_P) : "#333");
-        const lw_P = sup_P !== undefined ? sup_lw : lw;
+        const lw_P = nodeWidthPx[nd.id] / gZoom;
 
         for (const ch of nd.children) {
           const bRect = (rectCoords as any)[ch];
@@ -957,7 +993,7 @@ export default function Phylo() {
 
           const sup_C = nodes[ch].support;
           const color_C = nodeRangeColor.get(ch) ?? (optSupportColouring && sup_C !== undefined ? supportColor(sup_C) : "#333");
-          const lw_C = sup_C !== undefined ? sup_lw : lw;
+          const lw_C = nodeWidthPx[ch] / gZoom;
 
           if (P.radius > 0) {
             ctx.beginPath();
@@ -1022,8 +1058,8 @@ export default function Phylo() {
       const N = leaves.length || 1;
       const anglePerLeaf = N > 0 ? (2 * Math.PI) / N : 0;
 
-      const lw = optBranchThickness / gZoom;
-      const sup_lw = optBranchThickness * 1.2 / gZoom;
+      ctx.lineCap = "round";
+      ctx.lineJoin = "round";
 
       // Edges
       for (const nd of nodes) {
@@ -1042,7 +1078,7 @@ export default function Phylo() {
           ctx.fillStyle = "rgba(100,100,100,0.35)";
           ctx.fill();
           ctx.strokeStyle = "#666";
-          ctx.lineWidth = lw;
+          ctx.lineWidth = nodeWidthPx[nd.id] / gZoom;
           ctx.stroke();
           continue;
         }
@@ -1057,7 +1093,7 @@ export default function Phylo() {
           ctx.moveTo(ax, ay);
           ctx.lineTo(bx, by);
           ctx.strokeStyle = nodeRangeColor.get(ch) ?? (optSupportColouring && sup !== undefined ? supportColor(sup) : "#333");
-          ctx.lineWidth = sup !== undefined ? sup_lw : lw;
+          ctx.lineWidth = nodeWidthPx[ch] / gZoom;
           ctx.stroke();
         }
       }
@@ -1446,7 +1482,7 @@ export default function Phylo() {
     showLeafLabels,
     optFontScale, optLodMinPx, optBranchThickness, optBarFill,
     optBackground, optShowSupportLabels, optSupportColouring,
-    rangeDisplayMode,
+    rangeDisplayMode, optTaperBranches,
   ]);
 
   // ==========================================================
@@ -2496,6 +2532,11 @@ export default function Phylo() {
     }
   };
 
+  const loadExample = () => {
+    setNewickFile(new File([exampleNewick], "RTtree.nwk", { type: "text/plain" }));
+    setCsvFile(new File([exampleCsv], "RTtreelabels.csv", { type: "text/csv" }));
+  };
+
   const handleSaveSession = () => {
     if (!tree || !newickText) return;
     const session = {
@@ -2949,6 +2990,11 @@ export default function Phylo() {
               <input type="file" ref={csvInputRef} accept=".csv,.tsv" style={{ display: "none" }} onChange={(e) => setCsvFile(e.target.files?.[0] || null)} />
             </div>
           </div>
+          <div className="row">
+            <button type="button" className="btn" style={{ width: "100%" }} onClick={loadExample}>
+              Load example data
+            </button>
+          </div>
           <div className="row" style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
             <button type="button" className="btn" onClick={handleSaveSession} disabled={!tree}>Save session</button>
             <button type="button" className="btn" onClick={() => sessionInputRef.current?.click()}>Load session</button>
@@ -3395,6 +3441,11 @@ export default function Phylo() {
                   style={{ width: 70, fontSize: 12 }} />
               </div>
             ))}
+            <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, marginBottom: 6 }}>
+              <input type="checkbox" checked={optTaperBranches}
+                onChange={(e) => setOptTaperBranches(e.target.checked)} />
+              Taper branches
+            </label>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
               <span style={{ fontSize: 12 }}>Background colour</span>
               <input type="color" value={optBackground} onChange={(e) => setOptBackground(e.target.value)}
