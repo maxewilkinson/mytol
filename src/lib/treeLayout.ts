@@ -17,10 +17,11 @@ export function layoutRectangular(
   const { nodes } = tree;
   let maxX: number;
   // subtreeHeight[id] = max edges from node to any leaf in its subtree (0 for leaves)
-  const subtreeHeight = new Int32Array(nodes.length);
+  let subtreeHeight = new Int32Array(0);
   if (phylogram) {
     maxX = d3.max(nodes, (n) => n.cumLen) || 1;
   } else {
+    subtreeHeight = new Int32Array(nodes.length);
     // Iterative post-order to compute subtree heights (safe for 500k trees)
     const order: number[] = [];
     const stk: number[] = [tree.root];

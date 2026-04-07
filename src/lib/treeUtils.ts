@@ -34,7 +34,7 @@ export function parseNewick(newick: string): any {
         throw new Error("Newick parse error at position " + i);
       }
       skipWs();
-      while (i < newick.length && /[A-Za-z0-9_.\-]/.test(newick[i])) {
+      while (i < newick.length && /[A-Za-z0-9_./\-]/.test(newick[i])) {
         name += newick[i++];
       }
     } else {
@@ -116,9 +116,18 @@ export function buildTree(ast: any): Tree {
       propCat: undefined,
     };
 
-    // Numeric internal-node name → bootstrap support value
-    if (!node.isLeaf && a.name && /^-?\d+(\.\d+)?$/.test(a.name)) {
-      node.support = parseFloat(a.name);
+    // Numeric internal-node name → bootstrap support value.
+    // Handles plain numbers ("95", "0.95") and IQ-TREE's "SH-aLRT/UFBoot" format ("95/100") —
+    // in the latter case the second value (UFBoot) is used as it's directly comparable to bootstrap.
+    if (!node.isLeaf && a.name) {
+      const slashIdx = a.name.indexOf("/");
+      if (slashIdx !== -1) {
+        const second = parseFloat(a.name.slice(slashIdx + 1));
+        if (!isNaN(second)) node.support = second > 1 ? second / 100 : second;
+      } else if (/^-?\d+(\.\d+)?$/.test(a.name)) {
+        const v = parseFloat(a.name);
+        node.support = v > 1 ? v / 100 : v;
+      }
     }
 
     nodes.push(node);

@@ -245,6 +245,22 @@ export default function Phylo() {
     return layoutUnrootedEqualAngle(tree, !phylogram);
   }, [tree, phylogram]);
 
+  // Per-node branch width. Taper: width ∝ (cladeSize/N)^0.3, min 0.5×.
+  // Memoised — only recomputes when tree topology or thickness options change, not on every pan/zoom.
+  const nodeWidthPx = useMemo(() => {
+    if (!tree) return new Float32Array(0);
+    const { nodes, leaves } = tree;
+    const N_leaves = leaves.length || 1;
+    const arr = new Float32Array(nodes.length);
+    for (let i = 0; i < nodes.length; i++) {
+      const nd = nodes[i];
+      arr[i] = optTaperBranches
+        ? optBranchThickness * Math.max(0.5, Math.pow((nd.R - nd.L) / N_leaves, 0.3))
+        : optBranchThickness;
+    }
+    return arr;
+  }, [tree, optTaperBranches, optBranchThickness]);
+
   // ==========================================================
   // Data loading
   // ==========================================================
@@ -626,17 +642,9 @@ export default function Phylo() {
       }
     }
 
-    // Per-node branch width (screen pixels before zoom adjustment).
-    // Taper: width ∝ (cladeSize/N)^0.3, min 0.5× so leaves stay visible.
-    const N_leaves = leaves.length || 1;
-    const nodeWidthPx = new Float32Array(nodes.length);
-    for (let i = 0; i < nodes.length; i++) {
-      const nd = nodes[i];
-      const tw = optTaperBranches
-        ? optBranchThickness * Math.max(0.5, Math.pow((nd.R - nd.L) / N_leaves, 0.3))
-        : optBranchThickness;
-      nodeWidthPx[i] = tw;
-    }
+    // Branch colour: range override → support colour → default
+    const nodeColor = (id: number, support?: number): string =>
+      nodeRangeColor.get(id) ?? (optSupportColouring && support !== undefined ? supportColor(support) : "#333");
 
     // ------ Highlight helpers (defined here to close over shared vars) ------
 
@@ -670,7 +678,7 @@ export default function Phylo() {
       const xNode = -W / 2 + PADDING + sx * a.x;
       const y1 = -H / 2 + PADDING + sy * nd.L;
       const y2 = -H / 2 + PADDING + sy * (nd.R - 1) + sy;
-      ctx.shadowColor = `rgba(${r},${g},${b},0.6)`;
+      ctx.shadowColor = `rgba(${r},${g},${b},0.5)`;
       ctx.shadowBlur = 10;
       const grad = ctx.createLinearGradient(xNode, 0, trackRightEdgeX, 0);
       grad.addColorStop(0, `rgba(${r},${g},${b},${alpha1})`);
@@ -866,8 +874,7 @@ export default function Phylo() {
           ctx.fill();
         }
 
-        const sup_P = nd.support;
-        const color_P = nodeRangeColor.get(nd.id) ?? (optSupportColouring && sup_P !== undefined ? supportColor(sup_P) : "#333");
+        const color_P = nodeColor(nd.id, nd.support);
         const lw_P = nodeWidthPx[nd.id];
 
         for (const ch of nd.children) {
@@ -875,8 +882,7 @@ export default function Phylo() {
           const xc = -W / 2 + PADDING + sx * b.x;
           const yc = -H / 2 + PADDING + sy * b.y;
 
-          const sup_C = nodes[ch].support;
-          const color_C = nodeRangeColor.get(ch) ?? (optSupportColouring && sup_C !== undefined ? supportColor(sup_C) : "#333");
+          const color_C = nodeColor(ch, nodes[ch].support);
           const lw_C = nodeWidthPx[ch];
 
           // Vertical segment
@@ -982,8 +988,7 @@ export default function Phylo() {
         const P = rectToPolar(rectMaxX > 0 ? aRect.x / rectMaxX : 0, aRect.y, N, R, startAngleDeg, arcDeg);
         if (!worldVisible(P.x, P.y)) continue;
 
-        const sup_P = nd.support;
-        const color_P = nodeRangeColor.get(nd.id) ?? (optSupportColouring && sup_P !== undefined ? supportColor(sup_P) : "#333");
+        const color_P = nodeColor(nd.id, nd.support);
         const lw_P = nodeWidthPx[nd.id] / gZoom;
 
         for (const ch of nd.children) {
@@ -991,8 +996,7 @@ export default function Phylo() {
           const C = rectToPolar(rectMaxX > 0 ? bRect.x / rectMaxX : 0, bRect.y, N, R, startAngleDeg, arcDeg);
           if (!worldVisible(P.x, P.y) && !worldVisible(C.x, C.y)) continue;
 
-          const sup_C = nodes[ch].support;
-          const color_C = nodeRangeColor.get(ch) ?? (optSupportColouring && sup_C !== undefined ? supportColor(sup_C) : "#333");
+          const color_C = nodeColor(ch, nodes[ch].support);
           const lw_C = nodeWidthPx[ch] / gZoom;
 
           if (P.radius > 0) {
@@ -1092,7 +1096,7 @@ export default function Phylo() {
           ctx.beginPath();
           ctx.moveTo(ax, ay);
           ctx.lineTo(bx, by);
-          ctx.strokeStyle = nodeRangeColor.get(ch) ?? (optSupportColouring && sup !== undefined ? supportColor(sup) : "#333");
+          ctx.strokeStyle = nodeColor(ch, sup);
           ctx.lineWidth = nodeWidthPx[ch] / gZoom;
           ctx.stroke();
         }
@@ -1480,9 +1484,9 @@ export default function Phylo() {
     activeRangeColor,
     collapsedNodes,
     showLeafLabels,
-    optFontScale, optLodMinPx, optBranchThickness, optBarFill,
+    optFontScale, optLodMinPx, nodeWidthPx, optBarFill,
     optBackground, optShowSupportLabels, optSupportColouring,
-    rangeDisplayMode, optTaperBranches,
+    rangeDisplayMode,
   ]);
 
   // ==========================================================
@@ -2533,6 +2537,9 @@ export default function Phylo() {
   };
 
   const loadExample = () => {
+    setCollapsedNodes(new Set());
+    setRanges([]);
+    setSelectedNode(null);
     setNewickFile(new File([exampleNewick], "RTtree.nwk", { type: "text/plain" }));
     setCsvFile(new File([exampleCsv], "RTtreelabels.csv", { type: "text/csv" }));
   };
@@ -2974,7 +2981,7 @@ export default function Phylo() {
             <div className="file-input-row">
               <button type="button" className="btn" onClick={() => newickInputRef.current?.click()}>Choose file…</button>
               <span className="note file-input-name">{newickFile?.name ?? "No file chosen"}</span>
-              <input type="file" ref={newickInputRef} accept=".nwk,.newick,.tree,.txt" style={{ display: "none" }} onChange={(e) => setNewickFile(e.target.files?.[0] || null)} />
+              <input type="file" ref={newickInputRef} accept=".nwk,.newick,.tree,.treefile,.txt" style={{ display: "none" }} onChange={(e) => setNewickFile(e.target.files?.[0] || null)} />
             </div>
             {tree && (
               <div className="note" style={{ marginTop: 4 }}>
