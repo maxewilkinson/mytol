@@ -100,7 +100,11 @@ export default function Phylo() {
   // ------------ Data / annotations ------------
 
   const [newickFile, setNewickFile] = useState<File | null>(null);
-  const [csvFile, setCsvFile] = useState<File | null>(null);
+  // Loaded annotation files. Each contributes its rows/columns to the merged
+  // annotation map; users can stack multiple files and close them individually.
+  const [annotationFiles, setAnnotationFiles] = useState<
+    Array<{ name: string; rows: AnnotationRow[]; columns: string[] }>
+  >([]);
 
   // Bug fix: store raw text so ladderize changes don't re-read from disk
   const [newickText, setNewickText] = useState<string | null>(null);
@@ -322,78 +326,114 @@ export default function Phylo() {
     setShowRangePanel(false);
   }, [hiddenLeafNames]);
 
-  // Annotations CSV/TSV
+  // Annotations: derive merged annotation map + track configs + colour maps
+  // from the list of loaded files. Multiple files stack (later files overwrite
+  // overlapping cells per id). User customisations on existing tracks/colours
+  // are preserved when files are added or removed.
   useEffect(() => {
-    if (!csvFile) {
-      setAnnotations(new Map());
-      setTrackConfig([]);
-      setColorMaps(new Map());
-      return;
+    // Merge rows by id across all files (later files override overlapping cells).
+    const map = new Map<string, AnnotationRow>();
+    for (const f of annotationFiles) {
+      for (const r of f.rows) {
+        const existing = map.get(r.id);
+        if (existing) Object.assign(existing, r);
+        else map.set(r.id, { ...r });
+      }
+    }
+    setAnnotations(map);
+
+    // Ordered union of columns across files (insertion order = load order).
+    const allColumns: string[] = [];
+    const seenCols = new Set<string>();
+    for (const f of annotationFiles) {
+      for (const c of f.columns) {
+        if (!seenCols.has(c)) { seenCols.add(c); allColumns.push(c); }
+      }
     }
 
-    (async () => {
-      const { rows, columns } = await parseAnnotations(csvFile);
-      const map = new Map<string, AnnotationRow>();
-      for (const r of rows) map.set(r.id, r);
-      setAnnotations(map);
-
-      const newConfigs: TrackConfig[] = [];
-      const newColorMaps = new Map<string, Map<string, string>>();
-
-      for (const col of columns) {
-        let isContinuous = true;
-        let maxVal = -Infinity;
-        const uniqueCats = new Set<string>();
-
-        for (const r of rows) {
-          const val = r[col];
-          if (val === null || val === undefined || val === "") continue;
-          if (isContinuous) {
-            const num = Number(val);
-            if (isNaN(num)) {
-              isContinuous = false;
-            } else if (num > maxVal) {
-              maxVal = num;
-            }
-          }
-          if (!isContinuous) {
-            uniqueCats.add(val.toString());
-          }
-        }
-
+    // Per-column type detection on merged rows.
+    const rowsList = [...map.values()];
+    const colMeta = new Map<string, { isContinuous: boolean; maxVal: number; cats: Set<string> }>();
+    for (const col of allColumns) {
+      let isContinuous = true;
+      let maxVal = -Infinity;
+      const cats = new Set<string>();
+      for (const r of rowsList) {
+        const val = r[col];
+        if (val === null || val === undefined || val === "") continue;
         if (isContinuous) {
-          newConfigs.push({
-            key: col,
-            label: col,
-            type: "continuous",
-            height: 20,
-            maxVal: maxVal > 0 ? maxVal : 1,
-            visible: true,
-          });
-        } else {
-          newConfigs.push({
-            key: col,
-            label: col,
-            type: "categorical",
-            height: 8,
-            visible: true,
-          });
-          const colorMap = new Map<string, string>();
-          for (const cat of uniqueCats) {
-            colorMap.set(cat, originalCategoryColor(cat));
-          }
-          newColorMaps.set(col, colorMap);
+          const num = Number(val);
+          if (isNaN(num)) isContinuous = false;
+          else if (num > maxVal) maxVal = num;
         }
+        if (!isContinuous) cats.add(val.toString());
       }
+      colMeta.set(col, { isContinuous, maxVal: maxVal > 0 ? maxVal : 1, cats });
+    }
 
-      setTrackConfig(newConfigs);
-      setColorMaps(newColorMaps);
-      setShowLegendKey(null);
-      setEditingColor(null);
-      const firstCatKey = newConfigs.find(t => t.type === "categorical")?.key ?? null;
-      setRangeColorTrackKey(firstCatKey);
-    })();
-  }, [csvFile]);
+    setTrackConfig(prev => {
+      const prevByKey = new Map(prev.map(t => [t.key, t]));
+      return allColumns.map(col => {
+        const meta = colMeta.get(col)!;
+        const existing = prevByKey.get(col);
+        const desiredType = meta.isContinuous ? "continuous" : "categorical";
+        if (existing && existing.type === desiredType) {
+          if (existing.type === "continuous") {
+            return { ...existing, maxVal: Math.max(existing.maxVal ?? 1, meta.maxVal) };
+          }
+          return existing;
+        }
+        if (meta.isContinuous) {
+          return { key: col, label: col, type: "continuous" as const, height: 20, maxVal: meta.maxVal, visible: true };
+        }
+        return { key: col, label: col, type: "categorical" as const, height: 8, visible: true };
+      });
+    });
+
+    setColorMaps(prev => {
+      const next = new Map<string, Map<string, string>>();
+      for (const col of allColumns) {
+        const meta = colMeta.get(col)!;
+        if (meta.isContinuous) continue;
+        const old = prev.get(col);
+        const colorMap = new Map<string, string>();
+        for (const cat of meta.cats) {
+          colorMap.set(cat, old?.get(cat) ?? originalCategoryColor(cat));
+        }
+        next.set(col, colorMap);
+      }
+      return next;
+    });
+
+    // Clear legend/colour-editor selections if their column went away.
+    setShowLegendKey(prev => (prev && seenCols.has(prev) ? prev : null));
+    setEditingColor(prev => (prev && seenCols.has(prev.trackKey) ? prev : null));
+    setRangeColorTrackKey(prev => {
+      if (prev && seenCols.has(prev)) {
+        const meta = colMeta.get(prev);
+        if (meta && !meta.isContinuous) return prev;
+      }
+      for (const col of allColumns) {
+        if (!colMeta.get(col)!.isContinuous) return col;
+      }
+      return null;
+    });
+  }, [annotationFiles]);
+
+  // Append an annotation file. Parses then pushes onto the file list — the
+  // effect above rebuilds derived state.
+  const addAnnotationFile = async (file: File) => {
+    try {
+      const { rows, columns } = await parseAnnotations(file);
+      setAnnotationFiles(prev => [...prev, { name: file.name, rows, columns }]);
+    } catch (e) {
+      console.error("Failed to parse annotations:", e);
+    }
+  };
+
+  const removeAnnotationFile = (idx: number) => {
+    setAnnotationFiles(prev => prev.filter((_, i) => i !== idx));
+  };
 
   // ==========================================================
   // Colouring helpers
@@ -2536,12 +2576,19 @@ export default function Phylo() {
     }
   };
 
-  const loadExample = () => {
+  const loadExample = async () => {
     setCollapsedNodes(new Set());
     setRanges([]);
     setSelectedNode(null);
     setNewickFile(new File([exampleNewick], "RTtree.nwk", { type: "text/plain" }));
-    setCsvFile(new File([exampleCsv], "RTtreelabels.csv", { type: "text/csv" }));
+    // Replace any loaded annotation files with the example file.
+    const exFile = new File([exampleCsv], "RTtreelabels.csv", { type: "text/csv" });
+    try {
+      const { rows, columns } = await parseAnnotations(exFile);
+      setAnnotationFiles([{ name: exFile.name, rows, columns }]);
+    } catch (e) {
+      console.error("Failed to parse example annotations:", e);
+    }
   };
 
   const handleSaveSession = () => {
@@ -2992,10 +3039,42 @@ export default function Phylo() {
           <div className="row">
             <label className="label">Annotations (CSV/TSV)</label>
             <div className="file-input-row">
-              <button type="button" className="btn" onClick={() => csvInputRef.current?.click()}>Choose file…</button>
-              <span className="note file-input-name">{csvFile?.name ?? "No file chosen"}</span>
-              <input type="file" ref={csvInputRef} accept=".csv,.tsv" style={{ display: "none" }} onChange={(e) => setCsvFile(e.target.files?.[0] || null)} />
+              <button type="button" className="btn" onClick={() => csvInputRef.current?.click()}>
+                {annotationFiles.length > 0 ? "Add file…" : "Choose file…"}
+              </button>
+              <span className="note file-input-name">
+                {annotationFiles.length === 0
+                  ? "No file chosen"
+                  : `${annotationFiles.length} file${annotationFiles.length === 1 ? "" : "s"} loaded`}
+              </span>
+              <input
+                type="file"
+                ref={csvInputRef}
+                accept=".csv,.tsv"
+                style={{ display: "none" }}
+                onChange={(e) => {
+                  const file = e.target.files?.[0];
+                  if (file) addAnnotationFile(file);
+                  e.target.value = "";
+                }}
+              />
             </div>
+            {annotationFiles.length > 0 && (
+              <div style={{ marginTop: 4 }}>
+                {annotationFiles.map((f, idx) => (
+                  <span key={idx} className="chip" title={`${f.rows.length} rows · ${f.columns.length} columns`}>
+                    <span style={{ maxWidth: 160, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                      {f.name}
+                    </span>
+                    <button
+                      className="btn"
+                      onClick={() => removeAnnotationFile(idx)}
+                      title="Close this annotation file"
+                    >×</button>
+                  </span>
+                ))}
+              </div>
+            )}
           </div>
           <div className="row">
             <button type="button" className="btn" style={{ width: "100%" }} onClick={loadExample}>
@@ -3517,7 +3596,7 @@ export default function Phylo() {
           if (!file) return;
           const ext = file.name.split(".").pop()?.toLowerCase() ?? "";
           if (["nwk","newick","tree","txt"].includes(ext)) setNewickFile(file);
-          else if (["csv","tsv"].includes(ext)) setCsvFile(file);
+          else if (["csv","tsv"].includes(ext)) addAnnotationFile(file);
         }}
       >
         {!tree && (
