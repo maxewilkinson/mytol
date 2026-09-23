@@ -4,38 +4,44 @@ import type { AnnotationRow } from "./types";
 /**
  * Parse a CSV or TSV annotation file.
  *
- * Bug fix: the original code always used d3.csvParse, which silently failed
- * for TSV files (columns were not split). Now we detect the file extension
- * and use d3.tsvParse when appropriate.
- *
- * The file must contain an 'id' or 'name' column (case-insensitive) that
- * will be used to join rows against leaf names in the tree.
+ * The original behavior is preserved: prefer an explicit 'id' or 'name' column,
+ * and otherwise rely on the existing file parsing rules. An explicit UI/query
+ * override can select a specific metadata key when needed.
  */
 export async function parseAnnotations(
-  file: File
+  file: File,
+  idField?: string
 ): Promise<{ rows: AnnotationRow[]; columns: string[] }> {
   const text = await file.text();
 
-  const isTsv = file.name.toLowerCase().endsWith(".tsv");
+  const isTsv = file.name.toLowerCase().endsWith(".tsv") || text.includes("\t");
   const parsed = isTsv ? d3.tsvParse(text) : d3.csvParse(text);
 
-  const idCol = parsed.columns.find(
-    (c) => c.toLowerCase() === "id" || c.toLowerCase() === "name"
-  );
-  if (!idCol) {
+  const columns = parsed.columns.map((c) => c.trim());
+  const resolvedIdField =
+    idField && columns.some((c) => c.toLowerCase() === idField.toLowerCase())
+      ? columns.find((c) => c.toLowerCase() === idField.toLowerCase())!
+      : columns.find((c) => c.toLowerCase() === "id" || c.toLowerCase() === "name") ??
+        columns[0];
+
+  if (!resolvedIdField) {
     throw new Error(
-      `Annotation file must have an 'id' or 'name' column (found: ${parsed.columns.join(", ")})`
+      `Annotation file must include at least one column (found: ${columns.join(", ")})`
     );
   }
 
-  const dataRows = parsed.map((r) => {
-    const row: AnnotationRow = { id: (r[idCol] ?? "").toString() };
-    for (const col of parsed.columns) {
-      if (col !== idCol) row[col] = r[col];
-    }
-    return row;
-  });
+  const dataRows = parsed
+    .map((r) => {
+      const row: AnnotationRow = {
+        id: String(r[resolvedIdField] ?? "").trim(),
+      };
+      for (const col of columns) {
+        if (col !== resolvedIdField) row[col] = r[col] != null ? String(r[col]).trim() : r[col];
+      }
+      return row;
+    })
+    .filter((r) => r.id !== "");
 
-  const dataCols = parsed.columns.filter((c) => c !== idCol);
+  const dataCols = columns.filter((c) => c !== resolvedIdField);
   return { rows: dataRows, columns: dataCols };
 }
