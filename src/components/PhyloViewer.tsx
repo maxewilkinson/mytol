@@ -228,6 +228,32 @@ export default function Phylo() {
   const toggleSection = (key: keyof typeof sectionOpen) =>
     setSectionOpen((s) => ({ ...s, [key]: !s[key] }));
 
+  const [urlColorConfig, setUrlColorConfig] = useState<{
+    colorMapping?: Record<string, number[] | string>;
+    defaultColorByField?: string;
+  } | null>(null);
+
+  function normalizeColor(value: number[] | string | undefined): string | null {
+    if (typeof value === "string") {
+      if (/^#([0-9a-f]{3}|[0-9a-f]{6})$/i.test(value)) return value;
+      if (/^rgb\(/i.test(value)) return value;
+      return null;
+    }
+    if (Array.isArray(value) && value.length >= 3) {
+      const [r, g, b] = value.map((n) => Number(n));
+      if ([r, g, b].every((n) => Number.isFinite(n))) {
+        const toHex = (n: number) => Math.max(0, Math.min(255, Math.round(n))).toString(16).padStart(2, "0");
+        return `#${toHex(r)}${toHex(g)}${toHex(b)}`;
+      }
+    }
+    return null;
+  }
+
+  function normalizeFieldName(value?: string): string | undefined {
+    if (!value) return value;
+    return value.startsWith("meta_") ? value.slice("meta_".length) : value;
+  }
+
   // ------------ Refs ------------
 
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
@@ -406,17 +432,27 @@ export default function Phylo() {
         const old = prev.get(col);
         const colorMap = new Map<string, string>();
         for (const cat of meta.cats) {
-          colorMap.set(cat, old?.get(cat) ?? originalCategoryColor(cat));
+          const defaultField = normalizeFieldName(urlColorConfig?.defaultColorByField);
+          const override =
+            urlColorConfig && col === defaultField
+              ? normalizeColor(urlColorConfig.colorMapping?.[cat])
+              : null;
+          colorMap.set(cat, override ?? old?.get(cat) ?? originalCategoryColor(cat));
         }
         next.set(col, colorMap);
       }
       return next;
     });
 
+    const defaultField = normalizeFieldName(urlColorConfig?.defaultColorByField);
+
     // Clear legend/colour-editor selections if their column went away.
     setShowLegendKey(prev => (prev && seenCols.has(prev) ? prev : null));
     setEditingColor(prev => (prev && seenCols.has(prev.trackKey) ? prev : null));
     setRangeColorTrackKey(prev => {
+      if (defaultField && seenCols.has(defaultField)) {
+        return defaultField;
+      }
       if (prev && seenCols.has(prev)) {
         const meta = colMeta.get(prev);
         if (meta && !meta.isContinuous) return prev;
@@ -426,7 +462,11 @@ export default function Phylo() {
       }
       return null;
     });
-  }, [annotationFiles]);
+
+    if (defaultField && seenCols.has(defaultField)) {
+      setShowLegendKey(defaultField);
+    }
+  }, [annotationFiles, urlColorConfig]);
 
   // Append an annotation file. Parses then pushes onto the file list — the
   // effect above rebuilds derived state.
@@ -439,12 +479,77 @@ export default function Phylo() {
     }
   };
 
+  const loadTreeFromUrl = useCallback(async (url: string) => {
+    try {
+      const response = await fetch(url);
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      const text = await response.text();
+      const fileName = (() => {
+        try {
+          const parsed = new URL(url, window.location.href);
+          const candidate = parsed.pathname.split("/").pop();
+          return candidate ? decodeURIComponent(candidate) : "tree.nwk";
+        } catch {
+          return "tree.nwk";
+        }
+      })();
+      setNewickFile(new File([text], fileName || "tree.nwk", { type: "text/plain" }));
+    } catch (e) {
+      console.error("Failed to load tree from URL:", e);
+    }
+  }, []);
+
+  const loadMetaFromUrl = useCallback(async (url: string, idField?: string) => {
+    try {
+      const response = await fetch(url);
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      const text = await response.text();
+      const fileName = (() => {
+        try {
+          const parsed = new URL(url, window.location.href);
+          const candidate = parsed.pathname.split("/").pop();
+          return candidate ? decodeURIComponent(candidate) : "metadata.csv";
+        } catch {
+          return "metadata.csv";
+        }
+      })();
+      const file = new File([text], fileName || "metadata.csv", { type: "text/plain" });
+      const { rows, columns } = await parseAnnotations(file, idField);
+      setAnnotationFiles(prev => [...prev, { name: file.name, rows, columns }]);
+    } catch (e) {
+      console.error("Failed to load annotation metadata from URL:", e);
+    }
+  }, []);
+
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const treeUrl = params.get("treeUrl");
+    const metaUrl = params.get("metaUrl");
+    const metaIdField = params.get("metaIdField");
+    const configJson = params.get("config");
+
+    if (treeUrl) void loadTreeFromUrl(treeUrl);
+    if (metaUrl) void loadMetaFromUrl(metaUrl, metaIdField ?? undefined);
+
+    if (configJson) {
+      try {
+        const parsed = JSON.parse(configJson);
+        if (parsed && typeof parsed === "object") {
+          setUrlColorConfig({
+            colorMapping: parsed.colorMapping ?? undefined,
+            defaultColorByField: normalizeFieldName(parsed.defaultColorByField ?? undefined),
+          });
+        }
+      } catch (e) {
+        console.error("Failed to parse URL config:", e);
+      }
+    }
+  }, [loadTreeFromUrl, loadMetaFromUrl]);
+
   const removeAnnotationFile = (idx: number) => {
     setAnnotationFiles(prev => prev.filter((_, i) => i !== idx));
   };
 
-  // ==========================================================
-  // Colouring helpers
   // ==========================================================
 
   function supportColor(val: number): string {
@@ -3601,7 +3706,7 @@ export default function Phylo() {
                   if ((layout === "rect") !== (l === "rect")) { setOffset({ x: 0, y: 0 }); setVZoom(1); setGZoom(1); }
                   setLayout(l); setSelectedNode(null); setShowRangePanel(false);
                 }}>
-                  <img src={`/icons/layout-${l === "rect" ? "rect" : l === "circular" ? "circular" : "unrooted"}.svg`} alt={l} />
+                  <img src={`./icons/layout-${l === "rect" ? "rect" : l === "circular" ? "circular" : "unrooted"}.svg`} alt={l} />
                   {l === "rect" ? "Rect" : l === "circular" ? "Circ" : "Unrooted"}
                 </button>
               ))}
