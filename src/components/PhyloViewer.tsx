@@ -198,6 +198,14 @@ export default function Phylo() {
   const [suggestIx, setSuggestIx] = useState<number>(-1);
   const [showSuggests, setShowSuggests] = useState<boolean>(false);
 
+  // Search leaves by annotation value
+  const [annSearchKey, setAnnSearchKey] = useState<string>("");
+  const [annSearchQuery, setAnnSearchQuery] = useState("");
+  const [annHitIx, setAnnHitIx] = useState(-1);
+
+  // Feedback from "Load ranges from files" (unmatched names, non-clades)
+  const [rangeImportMsg, setRangeImportMsg] = useState<string[] | null>(null);
+
   // ------------ Export / options ------------
   const [exportScale, setExportScale] = useState(2);
 
@@ -1167,8 +1175,9 @@ export default function Phylo() {
             const arcPx = r1 * arcPerLeaf * gZoom;
             const leafStep = Math.max(1, Math.floor(optLodMinPx / Math.max(arcPx, 1e-9)));
 
-            // Batch arc segments by colour — one fill() per distinct colour
-            const colorSegs = new Map<string, Array<[number, number]>>();
+            // Batch arc segments by colour — one fill() per distinct colour.
+            // Continuous bars grow outward from r1 (matches circular layout).
+            const colorSegs = new Map<string, Array<[number, number, number]>>();
             for (let i = 0; i < sortedLeafIds.length; i += leafStep) {
               const leafIdA = sortedLeafIds[i];
               const leafIdB = sortedLeafIds[(i + leafStep) % sortedLeafIds.length];
@@ -1177,14 +1186,15 @@ export default function Phylo() {
               const val = row ? row[track.key] : undefined;
               if (val === null || val === undefined || val === "") continue;
 
-              let color: string;
+              let color: string, rOuter: number;
               if (track.type === "categorical") {
                 color = colorMaps.get(track.key)?.get(val.toString()) ?? "#aaa";
+                rOuter = r2;
               } else {
                 const num = Number(val);
                 if (isNaN(num)) continue;
-                const t = Math.min(1, Math.max(0, num / (track.maxVal || 1)));
-                color = `rgba(80,80,80,${(0.1 + t * 0.85).toFixed(2)})`;
+                rOuter = r1 + Math.min(1, Math.max(0, num / (track.maxVal || 1))) * (r2 - r1);
+                color = "#666";
               }
 
               const a1 = coords[leafIdA].angle;
@@ -1194,15 +1204,15 @@ export default function Phylo() {
               if (!worldVisible(r1 * Math.cos(midA), r1 * Math.sin(midA))) continue;
 
               if (!colorSegs.has(color)) colorSegs.set(color, []);
-              colorSegs.get(color)!.push([a1, a2]);
+              colorSegs.get(color)!.push([a1, a2, rOuter]);
             }
 
             for (const [color, segs] of colorSegs) {
               ctx.fillStyle = color;
               ctx.beginPath();
-              for (const [a1, a2] of segs) {
-                ctx.moveTo(r2 * Math.cos(a1), r2 * Math.sin(a1));
-                ctx.arc(0, 0, r2, a1, a2, false);
+              for (const [a1, a2, rOuter] of segs) {
+                ctx.moveTo(rOuter * Math.cos(a1), rOuter * Math.sin(a1));
+                ctx.arc(0, 0, rOuter, a1, a2, false);
                 ctx.arc(0, 0, r1, a2, a1, true);
                 ctx.closePath();
               }
@@ -1329,6 +1339,9 @@ export default function Phylo() {
         for (const track of trackConfig) {
           if (!track.visible) { currentR += track.height + TRACK_PADDING; continue; }
           const r1 = currentR, r2 = r1 + track.height;
+          // Continuous bars grow OUTWARD from the inner ring edge (r1) toward r2,
+          // so the bar's "tip" points away from the tree centre — matching the
+          // rectangular layout where bars point toward the labels.
           const colorSegs = new Map<string, Array<[number, number, number]>>();
           for (let i = 0; i < leafData.length; i++) {
             const { a, row } = leafData[i];
@@ -1338,25 +1351,26 @@ export default function Phylo() {
             const a2 = a + (a2full - a) * optBarFill;
             const val = row ? row[track.key] : undefined;
             if (val === null || val === undefined || val === "") continue;
-            let color: string, rEnd = r1;
+            let color: string, rOuter: number;
             if (track.type === "categorical") {
               color = colorMaps.get(track.key)?.get(val.toString()) ?? "#aaa";
+              rOuter = r2;
             } else {
               const num = Number(val);
               if (isNaN(num)) continue;
-              rEnd = r1 + Math.min(1, Math.max(0, num / (track.maxVal || 1))) * (r2 - r1);
+              rOuter = r1 + Math.min(1, Math.max(0, num / (track.maxVal || 1))) * (r2 - r1);
               color = "#666";
             }
             if (!colorSegs.has(color)) colorSegs.set(color, []);
-            colorSegs.get(color)!.push([a, a2, rEnd]);
+            colorSegs.get(color)!.push([a, a2, rOuter]);
           }
           for (const [color, segs] of colorSegs) {
             ctx.fillStyle = color;
             ctx.beginPath();
-            for (const [a1, a2, rEnd] of segs) {
-              ctx.moveTo(r2 * Math.cos(a1), r2 * Math.sin(a1));
-              ctx.arc(0, 0, r2, a1, a2, false);
-              ctx.arc(0, 0, rEnd, a2, a1, true);
+            for (const [a1, a2, rOuter] of segs) {
+              ctx.moveTo(rOuter * Math.cos(a1), rOuter * Math.sin(a1));
+              ctx.arc(0, 0, rOuter, a1, a2, false);
+              ctx.arc(0, 0, r1, a2, a1, true);
               ctx.closePath();
             }
             ctx.fill();
@@ -1452,6 +1466,43 @@ export default function Phylo() {
       }
     }
 
+    // ---- Annotation search hits: ring markers on matching leaf tips (screen space) ----
+    if (annSearchHits.length > 0) {
+      const Rc = Math.min(W, H) * CIRC_RADIUS_FRACTION;
+      const Ru = unrootedLayout ? Rc / (unrootedLayout.maxR || 1) : 0;
+      const N = leaves.length || 1;
+      ctx.save();
+      ctx.beginPath();
+      for (const id of annSearchHits) {
+        if (skipNode[id] === 2) continue;
+        let x: number, y: number;
+        if (layout === "rect") {
+          const a = (rectCoords as any)[id];
+          x = PADDING + sx * a.x + offset.x;
+          y = H / 2 + offset.y + vZoom * (-H / 2 + PADDING + sy * a.y);
+        } else if (layout === "circular") {
+          const a = (rectCoords as any)[id];
+          const P = rectToPolar(rectMaxX > 0 ? a.x / rectMaxX : 0, a.y, N, Rc, rotation, arc);
+          x = W / 2 + offset.x + gZoom * P.x;
+          y = H / 2 + offset.y + gZoom * P.y;
+        } else {
+          if (!unrootedLayout) break;
+          const c = unrootedLayout.coords[id];
+          x = W / 2 + offset.x + gZoom * c.x * Ru;
+          y = H / 2 + offset.y + gZoom * c.y * Ru;
+        }
+        if (x < -6 || y < -6 || x > W + 6 || y > H + 6) continue;
+        ctx.moveTo(x + 4, y);
+        ctx.arc(x, y, 4, 0, 2 * Math.PI);
+      }
+      ctx.fillStyle = "rgba(214,51,108,0.3)";
+      ctx.fill();
+      ctx.strokeStyle = "#d6336c";
+      ctx.lineWidth = 1.5;
+      ctx.stroke();
+      ctx.restore();
+    }
+
     // ---- Scale bar (screen space) ----
     if (phylogram) {
       let pxPerUnit = 0;
@@ -1496,6 +1547,46 @@ export default function Phylo() {
 
   // Bug fix: added collapsedNodes and hiddenNodes to the dependency array so
   // that manual collapse/hide operations correctly trigger a redraw.
+  // Leaves matching the annotation search, in tree order (declared before the
+  // draw effect because its dependency list reads it during render).
+  // Continuous columns accept ">5", ">=5", "<5", "<=5", "=5", "5" or "2-8";
+  // otherwise matching is case-insensitive: exact if some value equals the
+  // query (e.g. picked from the suggestions), else substring.
+  const annSearchHits = useMemo<number[]>(() => {
+    const q = annSearchQuery.trim();
+    if (!tree || !annSearchKey || !q) return [];
+    const track = trackConfig.find((t) => t.key === annSearchKey);
+    const NUM = "[+-]?(?:\\d+\\.?\\d*|\\.\\d+)(?:e[+-]?\\d+)?";
+    let numTest: ((n: number) => boolean) | null = null;
+    if (track?.type === "continuous") {
+      const cmp = new RegExp(`^(>=|<=|>|<|=)?\\s*(${NUM})$`, "i").exec(q);
+      const rng = new RegExp(`^(${NUM})\\s*(?:\\.\\.|to|–|-)\\s*(${NUM})$`, "i").exec(q);
+      if (cmp) {
+        const v = Number(cmp[2]);
+        numTest = cmp[1] === ">" ? (n) => n > v : cmp[1] === ">=" ? (n) => n >= v
+          : cmp[1] === "<" ? (n) => n < v : cmp[1] === "<=" ? (n) => n <= v : (n) => n === v;
+      } else if (rng) {
+        const lo = Math.min(Number(rng[1]), Number(rng[2])), hi = Math.max(Number(rng[1]), Number(rng[2]));
+        numTest = (n) => n >= lo && n <= hi;
+      }
+    }
+    const values = (id: number) => {
+      const name = tree.nodes[id].name;
+      const v = name ? annotations.get(name)?.[annSearchKey] : undefined;
+      return v === undefined || v === null ? "" : String(v).trim();
+    };
+    let test: (v: string) => boolean;
+    if (numTest) {
+      const nt = numTest;
+      test = (v) => v !== "" && Number.isFinite(Number(v)) && nt(Number(v));
+    } else {
+      const ql = q.toLowerCase();
+      const exact = tree.leaves.some((id) => values(id).toLowerCase() === ql);
+      test = exact ? (v) => v.toLowerCase() === ql : (v) => v.toLowerCase().includes(ql);
+    }
+    return tree.leaves.filter((id) => test(values(id)));
+  }, [tree, annotations, trackConfig, annSearchKey, annSearchQuery]);
+
   useEffect(() => {
     draw();
   }, [
@@ -1527,6 +1618,7 @@ export default function Phylo() {
     optFontScale, optLodMinPx, nodeWidthPx, optBarFill,
     optBackground, optShowSupportLabels, optSupportColouring,
     rangeDisplayMode,
+    annSearchHits,
   ]);
 
   // ==========================================================
@@ -2128,6 +2220,7 @@ export default function Phylo() {
 
   const sessionInputRef = useRef<HTMLInputElement>(null);
   const newickInputRef = useRef<HTMLInputElement | null>(null);
+  const rangeFilesInputRef = useRef<HTMLInputElement | null>(null);
   const csvInputRef = useRef<HTMLInputElement | null>(null);
 
   const handleExportSvg = () => {
@@ -2372,19 +2465,20 @@ export default function Phylo() {
               const a2 = a + (a2full - a) * optBarFill;
               const val = row ? row[track.key] : undefined;
               if (val === null || val === undefined || val === "") continue;
-              let color: string, rEnd = r1s;
-              if (track.type === "categorical") { color = colorMaps.get(track.key)?.get(val.toString()) ?? "#aaa"; }
-              else { const n = Number(val); if (isNaN(n)) continue; rEnd = r1s + Math.min(1, Math.max(0, n / (track.maxVal || 1))) * (r2s - r1s); color = "#666"; }
+              let color: string, rOuter: number;
+              if (track.type === "categorical") { color = colorMaps.get(track.key)?.get(val.toString()) ?? "#aaa"; rOuter = r2s; }
+              else { const n = Number(val); if (isNaN(n)) continue; rOuter = r1s + Math.min(1, Math.max(0, n / (track.maxVal || 1))) * (r2s - r1s); color = "#666"; }
               if (!cPaths.has(color)) cPaths.set(color, []);
-              // SVG annular arc: outer arc CW (sweep=1), inner arc CCW (sweep=0)
+              // SVG annular arc: outer arc CW (sweep=1), inner arc CCW (sweep=0).
+              // Bar grows outward from r1s (inner) to rOuter — matches canvas.
               let da = a2 - a; while (da > Math.PI) da -= 2 * Math.PI; while (da < -Math.PI) da += 2 * Math.PI;
               const sf = da >= 0 ? 1 : 0;
               const large = Math.abs(da) > Math.PI ? 1 : 0;
-              const [ox1, oy1] = [f(cx + r2s * Math.cos(a)), f(cy + r2s * Math.sin(a))];
-              const [ox2, oy2] = [f(cx + r2s * Math.cos(a2)), f(cy + r2s * Math.sin(a2))];
-              const [ix1, iy1] = [f(cx + rEnd * Math.cos(a2)), f(cy + rEnd * Math.sin(a2))];
-              const [ix2, iy2] = [f(cx + rEnd * Math.cos(a)), f(cy + rEnd * Math.sin(a))];
-              cPaths.get(color)!.push(`M ${ox1},${oy1} A ${f(r2s)},${f(r2s)} 0 ${large},${sf} ${ox2},${oy2} L ${ix1},${iy1} A ${f(rEnd)},${f(rEnd)} 0 ${large},${sf ^ 1} ${ix2},${iy2} Z`);
+              const [ox1, oy1] = [f(cx + rOuter * Math.cos(a)), f(cy + rOuter * Math.sin(a))];
+              const [ox2, oy2] = [f(cx + rOuter * Math.cos(a2)), f(cy + rOuter * Math.sin(a2))];
+              const [ix1, iy1] = [f(cx + r1s * Math.cos(a2)), f(cy + r1s * Math.sin(a2))];
+              const [ix2, iy2] = [f(cx + r1s * Math.cos(a)), f(cy + r1s * Math.sin(a))];
+              cPaths.get(color)!.push(`M ${ox1},${oy1} A ${f(rOuter)},${f(rOuter)} 0 ${large},${sf} ${ox2},${oy2} L ${ix1},${iy1} A ${f(r1s)},${f(r1s)} 0 ${large},${sf ^ 1} ${ix2},${iy2} Z`);
             }
             for (const [color, paths] of cPaths) lines.push(`<path fill="${color}" d="${paths.join(" ")}"/>`);
             curR += track.height + TRACK_PADDING;
@@ -2492,19 +2586,19 @@ export default function Phylo() {
               const row = annotations.get(nd.name || "");
               const val = row ? row[track.key] : undefined;
               if (val === null || val === undefined || val === "") continue;
-              let color: string;
-              if (track.type === "categorical") { color = colorMaps.get(track.key)?.get(val.toString()) ?? "#aaa"; }
-              else { const n = Number(val); if (isNaN(n)) continue; const t = Math.min(1, Math.max(0, n / (track.maxVal || 1))); color = `rgba(80,80,80,${(0.1 + t * 0.85).toFixed(2)})`; }
+              let color: string, rOuter: number;
+              if (track.type === "categorical") { color = colorMaps.get(track.key)?.get(val.toString()) ?? "#aaa"; rOuter = r2s; }
+              else { const n = Number(val); if (isNaN(n)) continue; rOuter = r1s + Math.min(1, Math.max(0, n / (track.maxVal || 1))) * (r2s - r1s); color = "#666"; }
               const a1 = coords[idA].angle;
               const a2raw = coords[idB].angle;
               const a2 = a2raw > a1 ? a2raw : a2raw + 2 * Math.PI;
               const large = (a2 - a1) > Math.PI ? 1 : 0;
-              const [ox1, oy1] = [cx + r2s * Math.cos(a1), cy + r2s * Math.sin(a1)];
-              const [ox2, oy2] = [cx + r2s * Math.cos(a2), cy + r2s * Math.sin(a2)];
+              const [ox1, oy1] = [cx + rOuter * Math.cos(a1), cy + rOuter * Math.sin(a1)];
+              const [ox2, oy2] = [cx + rOuter * Math.cos(a2), cy + rOuter * Math.sin(a2)];
               const [ix1, iy1] = [cx + r1s * Math.cos(a2), cy + r1s * Math.sin(a2)];
               const [ix2, iy2] = [cx + r1s * Math.cos(a1), cy + r1s * Math.sin(a1)];
               if (!cPaths.has(color)) cPaths.set(color, []);
-              cPaths.get(color)!.push(`M ${f(ox1)},${f(oy1)} A ${f(r2s)},${f(r2s)} 0 ${large},1 ${f(ox2)},${f(oy2)} L ${f(ix1)},${f(iy1)} A ${f(r1s)},${f(r1s)} 0 ${large},0 ${f(ix2)},${f(iy2)} Z`);
+              cPaths.get(color)!.push(`M ${f(ox1)},${f(oy1)} A ${f(rOuter)},${f(rOuter)} 0 ${large},1 ${f(ox2)},${f(oy2)} L ${f(ix1)},${f(iy1)} A ${f(r1s)},${f(r1s)} 0 ${large},0 ${f(ix2)},${f(iy2)} Z`);
             }
             for (const [color, paths] of cPaths) lines.push(`<path fill="${color}" d="${paths.join(" ")}"/>`);
             curR += track.height + TRACK_PADDING;
@@ -2815,6 +2909,92 @@ export default function Phylo() {
     });
   };
 
+  // Most recent common ancestor of a set of leaves: the smallest clade whose
+  // leaf span [L, R) covers all of them.
+  const mrcaOfLeaves = (leafIds: number[]): number | null => {
+    if (!tree || leafIds.length === 0) return null;
+    let lo = Infinity, hi = -Infinity;
+    for (const id of leafIds) {
+      const i = tree.nodes[id].leafIndex;
+      if (i < lo) lo = i;
+      if (i > hi) hi = i;
+    }
+    let u: number | null = leafIds[0];
+    while (u !== null) {
+      const nd: Node = tree.nodes[u];
+      if (nd.L <= lo && nd.R > hi) return u;
+      u = nd.parent;
+    }
+    return tree.root;
+  };
+
+  // Inverse of "Save leaves in ranges": each file is a list of leaf names (one
+  // per line) and becomes a range on their common ancestor, named after the
+  // file. Colour follows the "Default range colour source" like a manual range.
+  const handleLoadRangesFromFiles = async (fileList: FileList | null) => {
+    // Copy first: the caller clears the input, which empties the live FileList.
+    const files = Array.from(fileList ?? []);
+    if (!tree || files.length === 0) return;
+    const added: ColoredRange[] = [];
+    const notes: string[] = [];
+    for (const file of files) {
+      const label = file.name.replace(/\.txt$/i, "");
+      const names = (await file.text()).split(/\r?\n/).map((s) => s.trim()).filter(Boolean);
+      const ids = new Set<number>();
+      let missing = 0;
+      for (const n of names) {
+        const id = leafNameToId.get(n);
+        if (id === undefined) missing++; else ids.add(id);
+      }
+      const nodeId = mrcaOfLeaves([...ids]);
+      if (nodeId === null) { notes.push(`${label}: no leaves found in tree — skipped`); continue; }
+      if (missing) notes.push(`${label}: ${missing} of ${names.length} names not in tree`);
+      const extra = tree.nodes[nodeId].R - tree.nodes[nodeId].L - ids.size;
+      if (extra > 0) notes.push(`${label}: not a clade — range also covers ${extra} other leaves`);
+      const color = rangeColorTrackKey
+        ? getMostCommonCategory(nodeId, rangeColorTrackKey).color
+        : originalCategoryColor(label);
+      added.push({ nodeId, color, label });
+    }
+    setRanges((prev) => [
+      ...added,
+      ...prev.filter((r) => !added.some((a) => a.nodeId === r.nodeId && a.label === r.label)),
+    ]);
+    setRangeImportMsg([`Loaded ${added.length} of ${files.length} files.`, ...notes]);
+  };
+
+  // Export ranges as a TSV annotation file: one row per leaf with its range label.
+  // For nested ranges, the deepest (smallest-clade) range wins so each leaf gets
+  // one value. Leaves outside every range are omitted.
+  const handleExportRangesAsAnnotation = () => {
+    if (!tree || ranges.length === 0) return;
+    const rangeForLeaf = new Map<number, { label: string; size: number }>();
+    for (const r of ranges) {
+      const nd = tree.nodes[r.nodeId];
+      if (!nd) continue;
+      const label = r.label?.trim() || `range_${r.nodeId}`;
+      const size = nd.R - nd.L;
+      for (let i = nd.L; i < nd.R; i++) {
+        const leafId = tree.leaves[i];
+        const prev = rangeForLeaf.get(leafId);
+        if (!prev || size < prev.size) rangeForLeaf.set(leafId, { label, size });
+      }
+    }
+    const lines = ["id\trange"];
+    for (const leafId of tree.leaves) {
+      const entry = rangeForLeaf.get(leafId);
+      if (!entry) continue;
+      const name = tree.nodes[leafId].name;
+      if (!name) continue;
+      lines.push(`${name}\t${entry.label}`);
+    }
+    if (lines.length === 1) return;
+    const url = URL.createObjectURL(new Blob([lines.join("\n") + "\n"], { type: "text/tab-separated-values" }));
+    const aEl = document.createElement("a");
+    aEl.href = url; aEl.download = "ranges.tsv"; aEl.click();
+    URL.revokeObjectURL(url);
+  };
+
   const handleCopyLeaves = () => {
     const names = getSelectedLeaves();
     if (!names.length) return;
@@ -2877,33 +3057,81 @@ export default function Phylo() {
   // Hover clade stats
   // ==========================================================
 
-  const hoverCladeStats = useMemo(() => {
+  const formatStatNumber = (n: number): string => {
+    if (!isFinite(n)) return "—";
+    if (n === 0) return "0";
+    const abs = Math.abs(n);
+    if (abs >= 10000 || abs < 0.01) return n.toExponential(2);
+    if (Number.isInteger(n)) return n.toString();
+    return n.toPrecision(4).replace(/\.?0+$/, "");
+  };
+
+  type CladeStat =
+    | { key: string; label: string; type: "categorical"; topValues: [string, number][]; totalLeaves: number; labelledCount: number }
+    | { key: string; label: string; type: "continuous"; mean: number; min: number; max: number; count: number; totalLeaves: number };
+
+  const hoverCladeStats = useMemo<CladeStat[] | null>(() => {
     if (hoverNode === null || !tree) return null;
-    const catTracks = trackConfig.filter((t) => t.type === "categorical" && t.visible);
-    if (catTracks.length === 0) return null;
+    const visibleTracks = trackConfig.filter((t) => t.visible);
+    if (visibleTracks.length === 0) return null;
     const nd = tree.nodes[hoverNode];
-    const counts = new Map<string, Map<string, number>>();
-    catTracks.forEach((t) => counts.set(t.key, new Map()));
+
+    const catCounts = new Map<string, Map<string, number>>();
+    const contAgg = new Map<string, { sum: number; count: number; min: number; max: number }>();
+    for (const t of visibleTracks) {
+      if (t.type === "categorical") catCounts.set(t.key, new Map());
+      else contAgg.set(t.key, { sum: 0, count: 0, min: Infinity, max: -Infinity });
+    }
+
     for (let i = nd.L; i < nd.R; i++) {
       const name = tree.nodes[tree.leaves[i]].name;
       if (!name) continue;
       const row = annotations.get(name);
       if (!row) continue;
-      for (const t of catTracks) {
-        const val = row[t.key];
-        if (val !== undefined && val !== null && val !== "") {
-          const sVal = String(val);
-          const m = counts.get(t.key)!;
-          m.set(sVal, (m.get(sVal) || 0) + 1);
+      for (const t of visibleTracks) {
+        const raw = row[t.key];
+        if (raw === undefined || raw === null) continue;
+        // Trim whitespace so " " / "\t" don't slip through as Number(" ") === 0.
+        const val = typeof raw === "string" ? raw.trim() : raw;
+        if (val === "") continue;
+        if (t.type === "categorical") {
+          const m = catCounts.get(t.key)!;
+          m.set(String(val), (m.get(String(val)) || 0) + 1);
+        } else {
+          const num = Number(val);
+          if (!Number.isFinite(num)) continue;
+          const a = contAgg.get(t.key)!;
+          a.sum += num; a.count += 1;
+          if (num < a.min) a.min = num;
+          if (num > a.max) a.max = num;
         }
       }
     }
-    return catTracks.map((t) => {
-      const m = counts.get(t.key)!;
-      const sorted = [...m.entries()].sort((a, b) => b[1] - a[1]).slice(0, 5);
-      const labelledCount = [...m.values()].reduce((s, v) => s + v, 0);
-      return { key: t.key, label: t.label || t.key, topValues: sorted, totalLeaves: nd.R - nd.L, labelledCount };
-    }).filter((g) => g.topValues.length > 0);
+
+    const total = nd.R - nd.L;
+    const out: CladeStat[] = [];
+    for (const t of visibleTracks) {
+      if (t.type === "categorical") {
+        const m = catCounts.get(t.key)!;
+        const sorted = [...m.entries()].sort((a, b) => b[1] - a[1]).slice(0, 5);
+        const labelledCount = [...m.values()].reduce((s, v) => s + v, 0);
+        if (sorted.length === 0) continue;
+        out.push({ key: t.key, label: t.label || t.key, type: "categorical", topValues: sorted, totalLeaves: total, labelledCount });
+      } else {
+        const a = contAgg.get(t.key)!;
+        if (a.count === 0) continue;
+        const mean = a.sum / a.count;
+        // Sanity check — by construction mean ∈ [min, max]. If it ever escapes,
+        // log enough state to debug. (Has been reported once but not reproduced.)
+        if (mean < a.min - 1e-9 || mean > a.max + 1e-9) {
+          console.warn("[clade stats] impossible mean detected", {
+            track: t.key, node: hoverNode, sum: a.sum, count: a.count, min: a.min, max: a.max, mean,
+          });
+        }
+        out.push({ key: t.key, label: t.label || t.key, type: "continuous", mean, min: a.min, max: a.max, count: a.count, totalLeaves: total });
+      }
+    }
+    return out.length > 0 ? out : null;
   }, [hoverNode, tree, annotations, trackConfig]);
 
   // ==========================================================
@@ -2986,6 +3214,44 @@ export default function Phylo() {
     }
     setShowSuggests(false); setSuggestions([]);
   }, [tree, rectLayout, unrootedLayout, layout, phylogram, hSpan, vZoom, gZoom, rotation, arc, leafNameToId]);
+
+  // Annotation search: reset the stepping position whenever the hit list changes,
+  // and keep the chosen column valid as annotation files come and go.
+  useEffect(() => { setAnnHitIx(-1); }, [annSearchHits]);
+  useEffect(() => {
+    setAnnSearchKey((k) => (trackConfig.some((t) => t.key === k) ? k : trackConfig[0]?.key ?? ""));
+  }, [trackConfig]);
+
+  // Distinct values of the chosen column (categorical only) for suggestions.
+  const annSearchValues = useMemo(() => {
+    const track = trackConfig.find((t) => t.key === annSearchKey);
+    if (!track || track.type !== "categorical") return [];
+    return [...(colorMaps.get(annSearchKey)?.keys() ?? [])].sort();
+  }, [trackConfig, colorMaps, annSearchKey]);
+
+  const stepAnnHit = (dir: 1 | -1) => {
+    if (!tree || annSearchHits.length === 0) return;
+    const n = annSearchHits.length;
+    const next = annHitIx < 0 ? (dir === 1 ? 0 : n - 1) : (annHitIx + dir + n) % n;
+    setAnnHitIx(next);
+    const name = tree.nodes[annSearchHits[next]].name;
+    if (name) focusLeafByName(name);
+  };
+
+  const annHitsMrca = annSearchHits.length > 0 ? mrcaOfLeaves(annSearchHits) : null;
+  const annHitsExtra = annHitsMrca !== null && tree
+    ? tree.nodes[annHitsMrca].R - tree.nodes[annHitsMrca].L - annSearchHits.length
+    : 0;
+
+  const handleSaveAnnHits = () => {
+    if (!tree || annSearchHits.length === 0) return;
+    const names = annSearchHits.map((id) => tree.nodes[id].name).filter(Boolean);
+    const safe = `${annSearchKey}_${annSearchQuery.trim()}`.replace(/[^\w.-]+/g, "_");
+    const url = URL.createObjectURL(new Blob([names.join("\n")], { type: "text/plain" }));
+    const aEl = document.createElement("a");
+    aEl.href = url; aEl.download = `${safe}.txt`; aEl.click();
+    URL.revokeObjectURL(url);
+  };
 
   useEffect(() => {
     const onDocClick = () => setShowSuggests(false);
@@ -3157,10 +3423,30 @@ export default function Phylo() {
                   </span>
                 ))}
               </div>
-              <div style={{ marginTop: 6 }}>
+              <div style={{ marginTop: 6, display: "flex", gap: 6, flexWrap: "wrap" }}>
                 <button className="btn" onClick={handleSaveLeavesInRanges}>Save leaves in ranges</button>
+                <button className="btn" onClick={handleExportRangesAsAnnotation}>Export annotation file</button>
               </div>
             </>)}
+            <div style={{ marginTop: 6 }}>
+              <button className="btn" disabled={!tree} onClick={() => rangeFilesInputRef.current?.click()} title="One .txt file per range, one leaf name per line">
+                Load ranges from files…
+              </button>
+              <input
+                type="file"
+                multiple
+                accept=".txt,text/plain"
+                ref={rangeFilesInputRef}
+                style={{ display: "none" }}
+                onChange={(e) => { void handleLoadRangesFromFiles(e.target.files); e.target.value = ""; }}
+              />
+            </div>
+            {rangeImportMsg && (
+              <div className="note" style={{ marginTop: 4 }}>
+                {rangeImportMsg.map((m, i) => <div key={i}>{m}</div>)}
+                <button className="btn" style={{ marginTop: 2 }} onClick={() => setRangeImportMsg(null)}>Dismiss</button>
+              </div>
+            )}
           </div>
         )}
 
@@ -3198,6 +3484,54 @@ export default function Phylo() {
             )}
           </div>
         </div>
+
+        {trackConfig.length > 0 && (
+          <div className="row">
+            <label className="label">Search by annotation</label>
+            <div style={{ display: "flex", gap: 4 }}>
+              <select value={annSearchKey} onChange={(e) => setAnnSearchKey(e.target.value)} style={{ maxWidth: "45%", fontSize: 12 }}>
+                {trackConfig.map((t) => <option key={t.key} value={t.key}>{t.label || t.key}</option>)}
+              </select>
+              <div className="search-box" style={{ flex: 1 }}>
+                <input
+                  type="text"
+                  list="ann-search-values"
+                  value={annSearchQuery}
+                  placeholder={trackConfig.find((t) => t.key === annSearchKey)?.type === "continuous" ? ">0.5, 2-8, …" : "Value…"}
+                  onChange={(e) => setAnnSearchQuery(e.target.value)}
+                  onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); stepAnnHit(e.shiftKey ? -1 : 1); } }}
+                />
+                {!!annSearchQuery && (
+                  <button type="button" className="search-clear" onClick={() => setAnnSearchQuery("")} aria-label="Clear annotation search">×</button>
+                )}
+                <datalist id="ann-search-values">
+                  {annSearchValues.map((v) => <option key={v} value={v} />)}
+                </datalist>
+              </div>
+            </div>
+            {!!annSearchQuery.trim() && (
+              <div style={{ marginTop: 4 }}>
+                <div className="note">
+                  {annSearchHits.length === 0 ? "No matching leaves" : `${annSearchHits.length} matching leaves${annHitIx >= 0 ? ` — showing ${annHitIx + 1}` : ""}`}
+                </div>
+                {annSearchHits.length > 0 && (
+                  <div style={{ display: "flex", gap: 4, flexWrap: "wrap", marginTop: 4 }}>
+                    <button className="btn" onClick={() => stepAnnHit(-1)} title="Previous match (Shift+Enter)">◀</button>
+                    <button className="btn" onClick={() => stepAnnHit(1)} title="Next match (Enter)">▶</button>
+                    <button
+                      className="btn"
+                      onClick={() => { if (annHitsMrca !== null) { setSelectedNode(annHitsMrca); setShowRangePanel(false); } }}
+                      title={annHitsExtra > 0 ? `Their common ancestor also contains ${annHitsExtra} non-matching leaves` : "All matches form a single clade"}
+                    >
+                      Select ancestor{annHitsExtra > 0 ? ` (+${annHitsExtra})` : ""}
+                    </button>
+                    <button className="btn" onClick={handleSaveAnnHits}>Save list</button>
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+        )}
 
 
         {/* Selection panel */}
@@ -3633,19 +3967,33 @@ export default function Phylo() {
                 <div style={{ fontWeight: "bold", marginBottom: 3 }}>
                   {stat.label} <span style={{ fontWeight: "normal", color: "#666" }}>({stat.totalLeaves} leaves)</span>
                 </div>
-                {stat.topValues.map(([cat, count]) => {
-                  const color = colorMaps.get(stat.key)?.get(cat) || "#aaa";
-                  const denom = optPctIncludeUnlabelled ? stat.totalLeaves : stat.labelledCount;
-                  const pct = denom > 0 ? ((count / denom) * 100).toFixed(1) : "0.0";
-                  return (
-                    <div key={cat} style={{ display: "flex", alignItems: "center", marginBottom: 2 }}>
-                      <span style={{ width: 10, height: 10, background: color, marginRight: 6, borderRadius: 2, flexShrink: 0 }} />
-                      <span style={{ marginRight: "auto", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{cat}</span>
-                      <strong style={{ marginLeft: 6 }}>{count}</strong>
-                      <span style={{ color: "#888", marginLeft: 4, minWidth: 35, textAlign: "right" }}>({pct}%)</span>
+                {stat.type === "categorical" ? (
+                  stat.topValues.map(([cat, count]) => {
+                    const color = colorMaps.get(stat.key)?.get(cat) || "#aaa";
+                    const denom = optPctIncludeUnlabelled ? stat.totalLeaves : stat.labelledCount;
+                    const pct = denom > 0 ? ((count / denom) * 100).toFixed(1) : "0.0";
+                    return (
+                      <div key={cat} style={{ display: "flex", alignItems: "center", marginBottom: 2 }}>
+                        <span style={{ width: 10, height: 10, background: color, marginRight: 6, borderRadius: 2, flexShrink: 0 }} />
+                        <span style={{ marginRight: "auto", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{cat}</span>
+                        <strong style={{ marginLeft: 6 }}>{count}</strong>
+                        <span style={{ color: "#888", marginLeft: 4, minWidth: 35, textAlign: "right" }}>({pct}%)</span>
+                      </div>
+                    );
+                  })
+                ) : (
+                  <>
+                    <div style={{ display: "flex", alignItems: "center", marginBottom: 2 }}>
+                      <span style={{ marginRight: "auto" }}>mean</span>
+                      <strong>{formatStatNumber(stat.mean)}</strong>
+                      <span style={{ color: "#888", marginLeft: 4 }}>(n={stat.count})</span>
                     </div>
-                  );
-                })}
+                    <div style={{ display: "flex", alignItems: "center", color: "#666" }}>
+                      <span style={{ marginRight: "auto" }}>range</span>
+                      <span>{formatStatNumber(stat.min)} – {formatStatNumber(stat.max)}</span>
+                    </div>
+                  </>
+                )}
               </div>
             ))}
           </div>
